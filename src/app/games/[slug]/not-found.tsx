@@ -1,5 +1,6 @@
-import Link from "next/link";
 import { Frown } from "lucide-react";
+
+import { href } from "@/lib/paths";
 
 export default function GameNotFound() {
   return (
@@ -13,12 +14,12 @@ export default function GameNotFound() {
       <p className="mt-3 max-w-md text-lg text-muted-foreground">
         That game isn&apos;t in the gallery. Let&apos;s pick something fun together.
       </p>
-      <Link
-        href="/"
+      <a
+        href={href("/")}
         className="mt-8 inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3 text-lg font-bold text-primary-foreground ring-4 ring-white/70 shadow-pop-sm transition-transform hover:-translate-y-0.5"
       >
         Back to the games
-      </Link>
+      </a>
     </div>
   );
 }

@@ -1,7 +1,7 @@
-import Link from "next/link";
 import { ArrowRight, Lock, Sparkles } from "lucide-react";
 
 import type { Game } from "@/lib/games";
+import { href } from "@/lib/paths";
 import { cn } from "@/lib/utils";
 
 const statusLabel: Record<Game["status"], string> = {
@@ -23,9 +23,9 @@ export function GameCard({ game }: { game: Game }) {
 
   if (playable) {
     return (
-      <Link href={`/games/${game.slug}`} className={className}>
+      <a href={href(`/games/${game.slug}`)} className={className}>
         <Inner game={game} />
-      </Link>
+      </a>
     );
   }
 

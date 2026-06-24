@@ -219,11 +219,51 @@ function buildScene(
 
   // --- Scene + camera ---
   const scene = new THREE.Scene();
-  scene.background = new THREE.Color(0xffcfe9);
-  scene.fog = new THREE.Fog(0xffcfe9, 35, 90);
+  scene.fog = new THREE.Fog(0xff9bd0, 50, 120);
 
-  const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 200);
+  const camera = new THREE.PerspectiveCamera(70, 1, 0.1, 400);
   sizeCanvas();
+
+  // --- Skybox (rainbow gradient dome) ---
+  const skyMat = new THREE.ShaderMaterial({
+    side: THREE.BackSide,
+    depthWrite: false,
+    uniforms: {
+      topColor: { value: new THREE.Color(0xff6fcf) },
+      midColor: { value: new THREE.Color(0xff97e3) },
+      horizonColor: { value: new THREE.Color(0xffe3c2) },
+      groundColor: { value: new THREE.Color(0xd28af0) },
+    },
+    vertexShader: `
+      varying vec3 vDir;
+      void main() {
+        vDir = normalize(position);
+        gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+      }
+    `,
+    fragmentShader: `
+      uniform vec3 topColor;
+      uniform vec3 midColor;
+      uniform vec3 horizonColor;
+      uniform vec3 groundColor;
+      varying vec3 vDir;
+      void main() {
+        float h = vDir.y; // -1 .. 1
+        vec3 col;
+        if (h >= 0.0) {
+          float t = pow(h, 0.55);
+          // horizon → mid (lower half of sky) → top
+          col = mix(horizonColor, midColor, smoothstep(0.0, 0.4, t));
+          col = mix(col, topColor, smoothstep(0.4, 1.0, t));
+        } else {
+          col = mix(horizonColor, groundColor, smoothstep(0.0, 0.7, -h));
+        }
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `,
+  });
+  const sky = new THREE.Mesh(new THREE.SphereGeometry(180, 32, 16), skyMat);
+  scene.add(sky);
 
   // --- Lights ---
   scene.add(new THREE.HemisphereLight(0xfff0fb, 0xb47ab3, 0.85));
@@ -266,6 +306,10 @@ function buildScene(
 
   // --- World data ---
   const voxels = new Map<Key, number>();
+  // Reused across all addVoxel / removeVoxel calls. Declared early because
+  // the initial-plain loop below calls addVoxel before reaching the
+  // mutation block.
+  const tmpMatrix = new THREE.Matrix4();
   const perColor: PerColor[] = COLORS.map((c) => {
     const geo = new THREE.BoxGeometry(1, 1, 1);
     const mat = new THREE.MeshLambertMaterial({ color: c.hex });
@@ -312,6 +356,74 @@ function buildScene(
   const raycaster = new THREE.Raycaster();
   raycaster.far = REACH;
   const meshes = perColor.map((p) => p.mesh);
+
+  // Selection outline (wireframe box around the targeted block)
+  const outline = new THREE.LineSegments(
+    new THREE.EdgesGeometry(new THREE.BoxGeometry(1.02, 1.02, 1.02)),
+    new THREE.LineBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.9,
+      depthTest: true,
+    }),
+  );
+  outline.visible = false;
+  outline.renderOrder = 999;
+  scene.add(outline);
+
+  // Face highlight (translucent quad on the face where a new block would go)
+  const facePlane = new THREE.Mesh(
+    new THREE.PlaneGeometry(0.98, 0.98),
+    new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.32,
+      side: THREE.DoubleSide,
+      depthWrite: false,
+    }),
+  );
+  facePlane.visible = false;
+  facePlane.renderOrder = 999;
+  scene.add(facePlane);
+
+  const _faceUp = new THREE.Vector3(0, 1, 0);
+  const _faceTmp = new THREE.Vector3();
+  function updateHighlight() {
+    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
+    const hits = raycaster.intersectObjects(meshes, false);
+    if (hits.length === 0 || !hits[0].face) {
+      outline.visible = false;
+      facePlane.visible = false;
+      return;
+    }
+    const hit = hits[0];
+    const n = hit.face!.normal;
+    const inside = hit.point
+      .clone()
+      .add(n.clone().multiplyScalar(-0.01));
+    const bx = Math.floor(inside.x);
+    const by = Math.floor(inside.y);
+    const bz = Math.floor(inside.z);
+    outline.position.set(bx + 0.5, by + 0.5, bz + 0.5);
+    outline.visible = true;
+
+    // Position the face plane on the hit face, oriented to match the normal.
+    facePlane.position.set(
+      bx + 0.5 + n.x * 0.51,
+      by + 0.5 + n.y * 0.51,
+      bz + 0.5 + n.z * 0.51,
+    );
+    _faceTmp.copy(facePlane.position).add(n);
+    // lookAt + a non-parallel up vector to keep stable orientation
+    const up = Math.abs(n.y) > 0.99 ? new THREE.Vector3(0, 0, 1) : _faceUp;
+    facePlane.up.copy(up);
+    facePlane.lookAt(_faceTmp);
+    // Tint to the selected colour so the player sees what they'd place.
+    (facePlane.material as THREE.MeshBasicMaterial).color.setHex(
+      COLORS[selectedRef.current].hex,
+    );
+    facePlane.visible = true;
+  }
 
   function onMouseDown(e: MouseEvent) {
     if (document.pointerLockElement !== container) return;
@@ -500,7 +612,6 @@ function buildScene(
   }
 
   // --- World mutation ---
-  const tmpMatrix = new THREE.Matrix4();
   function addVoxel(x: number, y: number, z: number, colorIdx: number) {
     const key = k(x, y, z);
     if (voxels.has(key)) return;
@@ -626,6 +737,35 @@ function buildScene(
     if (!collided && axis === "y" && delta < 0) {
       player.onGround = false;
     }
+
+    // Invisible bedrock floor at y=0 — stops you falling through dug-out ground.
+    if (axis === "y" && player.pos.y < 0) {
+      player.pos.y = 0;
+      player.vel.y = 0;
+      player.onGround = true;
+    }
+    // Invisible walls at world edges — stops you walking past the rainbow plain.
+    if (axis === "x") {
+      const min = -HALF_W + PLAYER_HALF;
+      const max = HALF_W - PLAYER_HALF;
+      if (player.pos.x < min) {
+        player.pos.x = min;
+        player.vel.x = 0;
+      } else if (player.pos.x > max) {
+        player.pos.x = max;
+        player.vel.x = 0;
+      }
+    } else if (axis === "z") {
+      const min = -HALF_D + PLAYER_HALF;
+      const max = HALF_D - PLAYER_HALF;
+      if (player.pos.z < min) {
+        player.pos.z = min;
+        player.vel.z = 0;
+      } else if (player.pos.z > max) {
+        player.pos.z = max;
+        player.vel.z = 0;
+      }
+    }
     void before;
   }
 
@@ -648,11 +788,14 @@ function buildScene(
       mx /= mag;
       mz /= mag;
     }
-    // Rotate by yaw
+    // Rotate (mx,mz) by yaw around Y. Three.js Y-up rotation matrix:
+    //   x' =  x*cos(y) + z*sin(y)
+    //   z' = -x*sin(y) + z*cos(y)
+    // mz = -1 (W) at yaw=0 → wishZ = -cos = -1 → moves down -Z (forward). ✓
     const cos = Math.cos(player.yaw);
     const sin = Math.sin(player.yaw);
-    const wishX = mx * cos - mz * sin;
-    const wishZ = mx * sin + mz * cos;
+    const wishX = mx * cos + mz * sin;
+    const wishZ = -mx * sin + mz * cos;
     const target = WALK_SPEED;
     player.vel.x = wishX * target;
     player.vel.z = wishZ * target;
@@ -664,23 +807,14 @@ function buildScene(
     }
     player.vel.y -= GRAVITY * dt;
 
-    // Move with collision (axis-by-axis)
+    // Move with collision (axis-by-axis). moveAxis now also enforces the
+    // bedrock floor (y=0) and the invisible walls at the world edges.
     moveAxis("x", player.vel.x * dt);
     moveAxis("z", player.vel.z * dt);
     moveAxis("y", player.vel.y * dt);
 
-    // Safety: clamp to world bounds
-    if (player.pos.x < -HALF_W + 0.5) player.pos.x = -HALF_W + 0.5;
-    if (player.pos.x > HALF_W - 0.5) player.pos.x = HALF_W - 0.5;
-    if (player.pos.z < -HALF_D + 0.5) player.pos.z = -HALF_D + 0.5;
-    if (player.pos.z > HALF_D - 0.5) player.pos.z = HALF_D - 0.5;
-    if (player.pos.y < -10) {
-      // Fell out of the world somehow — respawn
-      player.pos.set(0, 8, 0);
-      player.vel.set(0, 0, 0);
-    }
-
     syncCamera();
+    updateHighlight();
 
     // Cloud drift
     clouds.position.x = ((t * 0.001) % 200) - 100;
@@ -723,6 +857,12 @@ function buildScene(
       particleMat.dispose();
       cloudGeo.dispose();
       cloudMat.dispose();
+      outline.geometry.dispose();
+      (outline.material as THREE.Material).dispose();
+      facePlane.geometry.dispose();
+      (facePlane.material as THREE.Material).dispose();
+      sky.geometry.dispose();
+      skyMat.dispose();
       renderer.dispose();
       if (renderer.domElement.parentNode === container) {
         container.removeChild(renderer.domElement);

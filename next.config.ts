@@ -12,9 +12,6 @@ const nextConfig: NextConfig = {
   env: {
     NEXT_PUBLIC_BASE_PATH: isProd ? repoBase : "",
   },
-  turbopack: {
-    root: process.cwd(),
-  },
 };
 
 export default nextConfig;

@@ -1,24 +1,14 @@
 "use client";
 
-import { Suspense } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useState } from "react";
 
 import { GameCard } from "@/components/game-card";
 import { GamePager } from "@/components/game-pager";
 import { getPage } from "@/lib/games";
 
-function GalleryInner() {
-  const router = useRouter();
-  const params = useSearchParams();
-  const requested = Number.parseInt(params.get("page") ?? "1", 10);
-  const { items, page, totalPages, total } = getPage(
-    Number.isFinite(requested) ? requested : 1,
-  );
-
-  const goToPage = (next: number) => {
-    const url = next === 1 ? "/" : `/?page=${next}`;
-    router.push(url, { scroll: true });
-  };
+export function GamesGallery() {
+  const [requested, setRequested] = useState(1);
+  const { items, page, totalPages, total } = getPage(requested);
 
   return (
     <>
@@ -47,23 +37,7 @@ function GalleryInner() {
         ))}
       </section>
 
-      <GamePager page={page} totalPages={totalPages} onPageChange={goToPage} />
+      <GamePager page={page} totalPages={totalPages} onPageChange={setRequested} />
     </>
-  );
-}
-
-export function GamesGallery() {
-  return (
-    <Suspense fallback={<GalleryFallback />}>
-      <GalleryInner />
-    </Suspense>
-  );
-}
-
-function GalleryFallback() {
-  return (
-    <div className="flex items-center justify-center py-24 text-muted-foreground">
-      Loading…
-    </div>
   );
 }

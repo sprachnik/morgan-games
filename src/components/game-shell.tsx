@@ -1,6 +1,5 @@
 "use client";
 
-import Link from "next/link";
 import { Lock } from "lucide-react";
 
 import { BubbleSplash } from "@/components/games/bubble-splash";
@@ -8,6 +7,7 @@ import { Morgancraft } from "@/components/games/morgancraft";
 import { PuppyQuest } from "@/components/games/puppy-quest";
 import { TapTheStars } from "@/components/games/tap-the-stars";
 import { getGame } from "@/lib/games";
+import { href } from "@/lib/paths";
 
 export function GameShell({ slug }: { slug: string }) {
   const game = getGame(slug);
@@ -58,12 +58,12 @@ function ComingSoon() {
         This game is still being made. Come back soon and it might be ready to
         play!
       </p>
-      <Link
-        href="/"
+      <a
+        href={href("/")}
         className="mt-8 inline-flex items-center gap-2 rounded-full bg-primary px-6 py-3 text-lg font-bold text-primary-foreground ring-4 ring-white/70 shadow-pop-sm transition-transform hover:-translate-y-0.5"
       >
         Pick another game
-      </Link>
+      </a>
     </div>
   );
 }
