@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Castle, Palette, Sparkles } from "lucide-react";
+import { Boxes, Castle, Palette, Sparkles } from "lucide-react";
 
 export type GameStatus = "ready" | "soon" | "idea";
 
@@ -14,6 +14,14 @@ export type Game = {
 };
 
 export const games: Game[] = [
+  {
+    slug: "morgancraft",
+    title: "Morgancraft",
+    blurb: "Dig and build with rainbow blocks in a tiny 3D world.",
+    Icon: Boxes,
+    gradient: "from-fun-yellow via-fun-mint to-fun-purple",
+    status: "ready",
+  },
   {
     slug: "puppy-quest",
     title: "Puppy Quest",

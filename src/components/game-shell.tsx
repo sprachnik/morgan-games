@@ -4,6 +4,7 @@ import Link from "next/link";
 import { Lock } from "lucide-react";
 
 import { BubbleSplash } from "@/components/games/bubble-splash";
+import { Morgancraft } from "@/components/games/morgancraft";
 import { PuppyQuest } from "@/components/games/puppy-quest";
 import { TapTheStars } from "@/components/games/tap-the-stars";
 import { getGame } from "@/lib/games";
@@ -34,6 +35,8 @@ export function GameShell({ slug }: { slug: string }) {
           <PuppyQuest />
         ) : game.slug === "bubble-splash" ? (
           <BubbleSplash />
+        ) : game.slug === "morgancraft" ? (
+          <Morgancraft />
         ) : (
           <ComingSoon />
         )}
