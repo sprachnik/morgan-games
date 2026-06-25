@@ -1,8 +1,14 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import * as THREE from "three";
-import { Expand, MousePointerClick } from "lucide-react";
+import { ArrowUp, Expand, Hammer, MousePointerClick, Pickaxe } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -58,16 +64,49 @@ type SceneState = {
   particles: THREE.Points;
   particleData: Float32Array; // x,y,z,vx,vy,vz,life,size repeating
   particleCount: number;
+  autoAction: () => void;
+  buildAction: () => void;
   dispose: () => void;
 };
+
+type TouchInput = {
+  joyActive: boolean;
+  joyDX: number;
+  joyDZ: number;
+  jumpHeld: boolean;
+};
+
+// Detect coarse-pointer / touch input. useSyncExternalStore keeps SSR safe
+// (returns false on the server) and avoids a setState-in-effect to flip it on
+// the client, which would trip the project's lint rule.
+const subscribeTouch = () => () => {};
+const getTouchSnapshot = () =>
+  "ontouchstart" in window || navigator.maxTouchPoints > 0;
+const getTouchServerSnapshot = () => false;
 
 export function Morgancraft() {
   const containerRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef<SceneState | null>(null);
   const selectedRef = useRef(0);
+  const touchInputRef = useRef<TouchInput>({
+    joyActive: false,
+    joyDX: 0,
+    joyDZ: 0,
+    jumpHeld: false,
+  });
   const [selected, setSelected] = useState(0);
   const [locked, setLocked] = useState(false);
   const [blockCount, setBlockCount] = useState(0);
+  const isTouch = useSyncExternalStore(
+    subscribeTouch,
+    getTouchSnapshot,
+    getTouchServerSnapshot,
+  );
+  const [joyKnob, setJoyKnob] = useState({ dx: 0, dy: 0, active: false });
+
+  const joyZoneRef = useRef<HTMLDivElement>(null);
+  const joyTouchIdRef = useRef<number | null>(null);
+  const joyCenterRef = useRef({ cx: 0, cy: 0, r: 60 });
 
   const pickColor = useCallback((idx: number) => {
     selectedRef.current = idx;
@@ -77,9 +116,14 @@ export function Morgancraft() {
   useEffect(() => {
     const container = containerRef.current;
     if (!container) return;
-    const state = buildScene(container, selectedRef, () => {
-      setBlockCount(state.voxels.size);
-    });
+    const state = buildScene(
+      container,
+      selectedRef,
+      touchInputRef,
+      () => {
+        setBlockCount(state.voxels.size);
+      },
+    );
     stateRef.current = state;
 
     const onLockChange = () => {
@@ -107,6 +151,7 @@ export function Morgancraft() {
   }, [pickColor]);
 
   const requestLock = () => {
+    if (isTouch) return;
     containerRef.current?.requestPointerLock();
   };
 
@@ -115,6 +160,101 @@ export function Morgancraft() {
     if (!el) return;
     if (document.fullscreenElement) document.exitFullscreen();
     else el.requestFullscreen?.();
+  };
+
+  const updateJoy = useCallback((clientX: number, clientY: number) => {
+    const { cx, cy, r } = joyCenterRef.current;
+    let dx = clientX - cx;
+    let dy = clientY - cy;
+    const mag = Math.hypot(dx, dy);
+    if (mag > r) {
+      dx = (dx / mag) * r;
+      dy = (dy / mag) * r;
+    }
+    const nx = dx / r;
+    const ny = dy / r;
+    const dead = 0.18;
+    const shape = (v: number) => {
+      const a = Math.abs(v);
+      if (a < dead) return 0;
+      return Math.sign(v) * Math.min(1, (a - dead) / (1 - dead));
+    };
+    touchInputRef.current.joyDX = shape(nx);
+    touchInputRef.current.joyDZ = shape(ny);
+    touchInputRef.current.joyActive =
+      touchInputRef.current.joyDX !== 0 || touchInputRef.current.joyDZ !== 0;
+    setJoyKnob({ dx, dy, active: true });
+  }, []);
+
+  const releaseJoy = useCallback(() => {
+    joyTouchIdRef.current = null;
+    touchInputRef.current.joyActive = false;
+    touchInputRef.current.joyDX = 0;
+    touchInputRef.current.joyDZ = 0;
+    setJoyKnob({ dx: 0, dy: 0, active: false });
+  }, []);
+
+  const onJoyTouchStart = (e: React.TouchEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (joyTouchIdRef.current !== null) return;
+    const touch = e.changedTouches[0];
+    if (!touch) return;
+    const rect = joyZoneRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    joyCenterRef.current = {
+      cx: rect.left + rect.width / 2,
+      cy: rect.top + rect.height / 2,
+      r: Math.min(rect.width, rect.height) / 2,
+    };
+    joyTouchIdRef.current = touch.identifier;
+    updateJoy(touch.clientX, touch.clientY);
+  };
+
+  const onJoyTouchMove = (e: React.TouchEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    for (let i = 0; i < e.touches.length; i++) {
+      const t = e.touches.item(i);
+      if (t && t.identifier === joyTouchIdRef.current) {
+        updateJoy(t.clientX, t.clientY);
+        return;
+      }
+    }
+  };
+
+  const onJoyTouchEnd = (e: React.TouchEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches.item(i);
+      if (t && t.identifier === joyTouchIdRef.current) {
+        releaseJoy();
+        return;
+      }
+    }
+  };
+
+  const onJumpStart = (e: React.TouchEvent | React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    touchInputRef.current.jumpHeld = true;
+  };
+  const onJumpEnd = (e: React.TouchEvent | React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    touchInputRef.current.jumpHeld = false;
+  };
+
+  const onDigPress = (e: React.TouchEvent | React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    stateRef.current?.autoAction();
+  };
+  const onBuildPress = (e: React.TouchEvent | React.PointerEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    stateRef.current?.buildAction();
   };
 
   return (
@@ -155,8 +295,8 @@ export function Morgancraft() {
           Full screen
         </button>
 
-        {/* Click-to-play overlay */}
-        {!locked && (
+        {/* Click-to-play overlay (desktop only) */}
+        {!locked && !isTouch && (
           <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-center bg-black/50 text-center text-white">
             <MousePointerClick className="size-12" />
             <p className="font-heading mt-3 text-3xl font-bold">Click to play</p>
@@ -165,6 +305,77 @@ export function Morgancraft() {
               1-7 picks a colour · ESC to pause
             </p>
           </div>
+        )}
+
+        {/* Touch controls */}
+        {isTouch && (
+          <>
+            <div className="pointer-events-none absolute left-1/2 top-4 z-10 -translate-x-1/2 rounded-full bg-black/55 px-4 py-1.5 text-center text-[11px] font-semibold text-white/90">
+              Drag screen to look · joystick to walk
+            </div>
+
+            {/* Virtual joystick (bottom-left) */}
+            <div
+              ref={joyZoneRef}
+              className="absolute bottom-5 left-5 z-20 size-36 touch-none select-none"
+              onTouchStart={onJoyTouchStart}
+              onTouchMove={onJoyTouchMove}
+              onTouchEnd={onJoyTouchEnd}
+              onTouchCancel={onJoyTouchEnd}
+            >
+              <div
+                className={cn(
+                  "absolute inset-0 rounded-full bg-black/45 ring-2 transition-colors",
+                  joyKnob.active ? "ring-white" : "ring-white/55",
+                )}
+              />
+              <div
+                className="absolute size-16 rounded-full bg-white/90 ring-2 ring-white shadow-pop-sm"
+                style={{
+                  left: "50%",
+                  top: "50%",
+                  transform: `translate(calc(-50% + ${joyKnob.dx}px), calc(-50% + ${joyKnob.dy}px))`,
+                }}
+              />
+            </div>
+
+            {/* Action buttons (bottom-right) */}
+            <div className="absolute bottom-5 right-5 z-20 flex flex-col items-end gap-3 touch-none select-none">
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onTouchStart={onDigPress}
+                  onContextMenu={(e) => e.preventDefault()}
+                  className="flex size-16 items-center justify-center rounded-full bg-rose-500/90 text-white ring-2 ring-white/70 shadow-pop-sm active:scale-95"
+                  aria-label="Dig"
+                >
+                  <Pickaxe className="size-7" />
+                </button>
+                <button
+                  type="button"
+                  onTouchStart={onBuildPress}
+                  onContextMenu={(e) => e.preventDefault()}
+                  className="flex size-16 items-center justify-center rounded-full text-white ring-2 ring-white/70 shadow-pop-sm active:scale-95"
+                  aria-label="Build"
+                  style={{ background: COLORS[selected].css }}
+                >
+                  <Hammer className="size-7" />
+                </button>
+              </div>
+              <button
+                type="button"
+                onTouchStart={onJumpStart}
+                onTouchEnd={onJumpEnd}
+                onTouchCancel={onJumpEnd}
+                onContextMenu={(e) => e.preventDefault()}
+                className="flex h-14 w-32 items-center justify-center gap-1.5 rounded-full bg-amber-400/95 text-base font-bold text-foreground ring-2 ring-white/70 shadow-pop-sm active:scale-95"
+                aria-label="Jump"
+              >
+                <ArrowUp className="size-5" />
+                Jump
+              </button>
+            </div>
+          </>
         )}
       </div>
 
@@ -190,8 +401,9 @@ export function Morgancraft() {
       </div>
 
       <p className="mt-3 text-center text-sm text-muted-foreground">
-        Tap an existing block to dig it. Tap empty space to build with the
-        selected colour.
+        {isTouch
+          ? "Use the pickaxe to dig the block you're looking at, and the hammer to build with the selected colour."
+          : "Tap an existing block to dig it. Tap empty space to build with the selected colour."}
       </p>
     </div>
   );
@@ -200,6 +412,7 @@ export function Morgancraft() {
 function buildScene(
   container: HTMLDivElement,
   selectedRef: React.MutableRefObject<number>,
+  touchInputRef: React.MutableRefObject<TouchInput>,
   notifyChange: () => void,
 ): SceneState {
   // --- Renderer ---
@@ -331,13 +544,13 @@ function buildScene(
   void edgesMat; // not currently instanced; left for future use
 
   // --- Initial flat plain ---
-  // y=0 is the top of the ground layer. Block at (x,0,z) means block occupies y ∈ [0,1].
-  // Pattern: rainbow stripes by x.
+  // Rainbow grid: every cell takes the next colour along the (x+z) diagonal so
+  // neighbours always differ along both axes, producing a tiled rainbow floor.
+  const palette = COLORS.length;
   for (let x = -HALF_W; x < HALF_W; x++) {
     for (let z = -HALF_D; z < HALF_D; z++) {
-      const colorIdx = ((((x + HALF_W) / 4) | 0) + 100) % COLORS.length;
-      const safe = Math.abs(colorIdx);
-      addVoxel(x, 0, z, safe);
+      const colorIdx = (((x + z) % palette) + palette) % palette;
+      addVoxel(x, 0, z, colorIdx);
     }
   }
   refreshAllInstances();
@@ -425,35 +638,27 @@ function buildScene(
     facePlane.visible = true;
   }
 
-  function onMouseDown(e: MouseEvent) {
-    if (document.pointerLockElement !== container) return;
-    e.preventDefault();
+  // Auto: dig the block at the crosshair, otherwise place into the empty cell
+  // on the hit face (kept for left-click and the touch tap-on-canvas gesture).
+  function autoAction() {
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
     const hits = raycaster.intersectObjects(meshes, false);
     if (hits.length === 0) return;
     const hit = hits[0];
     if (!hit.face) return;
-    const inside = hit.point
-      .clone()
-      .add(hit.face.normal.clone().multiplyScalar(-0.01));
-    const outside = hit.point
-      .clone()
-      .add(hit.face.normal.clone().multiplyScalar(0.01));
+    const normal = hit.face.normal;
+    const inside = hit.point.clone().add(normal.clone().multiplyScalar(-0.01));
     const bx = Math.floor(inside.x);
     const by = Math.floor(inside.y);
     const bz = Math.floor(inside.z);
-
-    if (e.button === 0 || e.button === undefined) {
-      // Auto: any click → dig the hit block
-      const key = k(bx, by, bz);
-      if (voxels.has(key)) {
-        removeVoxel(bx, by, bz);
-        spawnPuff(bx + 0.5, by + 0.5, bz + 0.5, voxels.get(key) ?? 0);
-        notifyChange();
-        return;
-      }
+    const key = k(bx, by, bz);
+    if (voxels.has(key)) {
+      removeVoxel(bx, by, bz);
+      spawnPuff(bx + 0.5, by + 0.5, bz + 0.5, voxels.get(key) ?? 0);
+      notifyChange();
+      return;
     }
-    // No block at hit → place at the empty cell adjacent to the face
+    const outside = hit.point.clone().add(normal.clone().multiplyScalar(0.01));
     const px = Math.floor(outside.x);
     const py = Math.floor(outside.y);
     const pz = Math.floor(outside.z);
@@ -465,10 +670,9 @@ function buildScene(
     spawnPuff(px + 0.5, py + 0.5, pz + 0.5, selectedRef.current);
     notifyChange();
   }
-  // Right-click also places (classic mapping); we always interpret left-click as "auto"
-  function onContextMenu(e: MouseEvent) {
-    e.preventDefault();
-    if (document.pointerLockElement !== container) return;
+
+  // Pure placement: drop a block on the empty cell next to the hit face.
+  function buildAction() {
     raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
     const hits = raycaster.intersectObjects(meshes, false);
     if (hits.length === 0) return;
@@ -488,8 +692,82 @@ function buildScene(
     spawnPuff(px + 0.5, py + 0.5, pz + 0.5, selectedRef.current);
     notifyChange();
   }
+
+  function onMouseDown(e: MouseEvent) {
+    if (document.pointerLockElement !== container) return;
+    e.preventDefault();
+    autoAction();
+  }
+
+  // Right-click places (classic mapping); left-click runs autoAction above.
+  function onContextMenu(e: MouseEvent) {
+    e.preventDefault();
+    if (document.pointerLockElement !== container) return;
+    buildAction();
+  }
   container.addEventListener("mousedown", onMouseDown);
   container.addEventListener("contextmenu", onContextMenu);
+
+  // --- Touch look + tap on the canvas ---
+  // The joystick zone and action buttons live in the React overlay and have
+  // their own touch listeners; touches that start on the canvas pan the camera
+  // and short still-taps trigger autoAction.
+  const lookState = {
+    id: -1,
+    lastX: 0,
+    lastY: 0,
+    startX: 0,
+    startY: 0,
+    startT: 0,
+  };
+  function onCanvasTouchStart(e: TouchEvent) {
+    e.preventDefault();
+    if (lookState.id !== -1) return;
+    const t = e.changedTouches[0];
+    if (!t) return;
+    lookState.id = t.identifier;
+    lookState.lastX = t.clientX;
+    lookState.lastY = t.clientY;
+    lookState.startX = t.clientX;
+    lookState.startY = t.clientY;
+    lookState.startT = performance.now();
+  }
+  function onCanvasTouchMove(e: TouchEvent) {
+    e.preventDefault();
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches.item(i);
+      if (!t || t.identifier !== lookState.id) continue;
+      const dx = t.clientX - lookState.lastX;
+      const dy = t.clientY - lookState.lastY;
+      lookState.lastX = t.clientX;
+      lookState.lastY = t.clientY;
+      player.yaw -= dx * 0.005;
+      player.pitch -= dy * 0.005;
+      const lim = Math.PI / 2 - 0.05;
+      if (player.pitch > lim) player.pitch = lim;
+      if (player.pitch < -lim) player.pitch = -lim;
+      return;
+    }
+  }
+  function onCanvasTouchEnd(e: TouchEvent) {
+    for (let i = 0; i < e.changedTouches.length; i++) {
+      const t = e.changedTouches.item(i);
+      if (!t || t.identifier !== lookState.id) continue;
+      const moved = Math.hypot(
+        t.clientX - lookState.startX,
+        t.clientY - lookState.startY,
+      );
+      const elapsed = performance.now() - lookState.startT;
+      if (moved < 10 && elapsed < 250) autoAction();
+      lookState.id = -1;
+      return;
+    }
+  }
+  const canvas = renderer.domElement;
+  canvas.addEventListener("touchstart", onCanvasTouchStart, { passive: false });
+  canvas.addEventListener("touchmove", onCanvasTouchMove, { passive: false });
+  canvas.addEventListener("touchend", onCanvasTouchEnd);
+  canvas.addEventListener("touchcancel", onCanvasTouchEnd);
 
   // --- Pointer-lock look ---
   function onMouseMove(e: MouseEvent) {
@@ -779,12 +1057,19 @@ function buildScene(
     // Input → desired horizontal velocity in camera-relative axes
     let mx = 0;
     let mz = 0;
-    if (keys.has("KeyW")) mz -= 1;
-    if (keys.has("KeyS")) mz += 1;
-    if (keys.has("KeyA")) mx -= 1;
-    if (keys.has("KeyD")) mx += 1;
+    const ti = touchInputRef.current;
+    if (ti.joyActive) {
+      mx = ti.joyDX;
+      mz = ti.joyDZ;
+    } else {
+      if (keys.has("KeyW")) mz -= 1;
+      if (keys.has("KeyS")) mz += 1;
+      if (keys.has("KeyA")) mx -= 1;
+      if (keys.has("KeyD")) mx += 1;
+    }
+    // Preserve magnitude for analog joystick; clamp combined keyboard diagonals to 1.
     const mag = Math.hypot(mx, mz);
-    if (mag > 0) {
+    if (mag > 1) {
       mx /= mag;
       mz /= mag;
     }
@@ -801,7 +1086,7 @@ function buildScene(
     player.vel.z = wishZ * target;
 
     // Jump
-    if (keys.has("Space") && player.onGround) {
+    if ((keys.has("Space") || ti.jumpHeld) && player.onGround) {
       player.vel.y = JUMP_V;
       player.onGround = false;
     }
@@ -839,6 +1124,8 @@ function buildScene(
     particles,
     particleData,
     particleCount,
+    autoAction,
+    buildAction,
     dispose: () => {
       cancelAnimationFrame(rafId);
       container.removeEventListener("mousedown", onMouseDown);
@@ -846,6 +1133,10 @@ function buildScene(
       document.removeEventListener("mousemove", onMouseMove);
       window.removeEventListener("keydown", onKeyDown);
       window.removeEventListener("keyup", onKeyUp);
+      canvas.removeEventListener("touchstart", onCanvasTouchStart);
+      canvas.removeEventListener("touchmove", onCanvasTouchMove);
+      canvas.removeEventListener("touchend", onCanvasTouchEnd);
+      canvas.removeEventListener("touchcancel", onCanvasTouchEnd);
       ro.disconnect();
       if (document.pointerLockElement === container) document.exitPointerLock();
       for (const pc of perColor) {
