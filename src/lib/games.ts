@@ -1,5 +1,5 @@
 import type { LucideIcon } from "lucide-react";
-import { Boxes, Castle, Palette, Sparkles } from "lucide-react";
+import { Boxes, Castle, Keyboard, Palette, Sparkles } from "lucide-react";
 
 export type GameStatus = "ready" | "soon" | "idea";
 
@@ -44,6 +44,14 @@ export const games: Game[] = [
     blurb: "Pop the twinkly stars before they fly away!",
     Icon: Sparkles,
     gradient: "from-fun-magenta via-fun-pink to-fun-yellow",
+    status: "ready",
+  },
+  {
+    slug: "unicorn-speller",
+    title: "Unicorn Speller",
+    blurb: "Ride a rainbow unicorn and type the words to defeat the snowball puppy!",
+    Icon: Keyboard,
+    gradient: "from-fun-yellow via-fun-pink to-fun-purple",
     status: "ready",
   },
 ];

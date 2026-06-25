@@ -6,6 +6,7 @@ import { BubbleSplash } from "@/components/games/bubble-splash";
 import { Morgancraft } from "@/components/games/morgancraft";
 import { PuppyQuest } from "@/components/games/puppy-quest";
 import { TapTheStars } from "@/components/games/tap-the-stars";
+import { UnicornSpeller } from "@/components/games/unicorn-speller";
 import { getGame } from "@/lib/games";
 import { href } from "@/lib/paths";
 
@@ -37,6 +38,8 @@ export function GameShell({ slug }: { slug: string }) {
           <BubbleSplash />
         ) : game.slug === "morgancraft" ? (
           <Morgancraft />
+        ) : game.slug === "unicorn-speller" ? (
+          <UnicornSpeller />
         ) : (
           <ComingSoon />
         )}
